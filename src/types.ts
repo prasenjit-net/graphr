@@ -20,6 +20,7 @@ export interface GraphConfig {
   showMinorGrid: boolean;
   showAxes: boolean;
   showLegend: boolean;
+  exportIntersectionLabels: boolean;
   xLabel: string;
   yLabel: string;
   majorStep: number;

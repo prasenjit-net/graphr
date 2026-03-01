@@ -18,6 +18,17 @@ interface Colors {
   legendBg: string;
 }
 
+interface CompiledEquation {
+  item: EquationItem;
+  evaluate: (x: number) => number;
+}
+
+export interface CurveIntersection {
+  x: number;
+  y: number;
+  label: string;
+}
+
 const themeColors: Record<Theme, Colors> = {
   light: {
     bg: '#f7fafc',
@@ -57,6 +68,20 @@ export function screenToWorld(
   };
 }
 
+function computeLabelStride(pixelsPerStep: number, minLabelSpacingPx: number): number {
+  if (!Number.isFinite(pixelsPerStep) || pixelsPerStep <= 0) {
+    return 1;
+  }
+  return Math.max(1, Math.ceil(minLabelSpacingPx / pixelsPerStep));
+}
+
+function formatTickValue(value: number, step: number): string {
+  const safeStep = Math.max(Math.abs(step), 1e-9);
+  const decimals = Math.max(0, Math.min(6, Math.ceil(-Math.log10(safeStep))));
+  const normalized = Math.abs(value) < 1e-10 ? 0 : value;
+  return normalized.toFixed(decimals);
+}
+
 function drawGrid(
   ctx: CanvasRenderingContext2D,
   width: number,
@@ -69,7 +94,21 @@ function drawGrid(
     return;
   }
 
-  const drawLines = (step: number, color: string, lineWidth: number) => {
+  const xRange = Math.max(1e-9, viewport.xMax - viewport.xMin);
+  const yRange = Math.max(1e-9, viewport.yMax - viewport.yMin);
+  const majorStep = Math.max(1e-9, config.majorStep);
+  const pixelsPerMajorX = (majorStep / xRange) * width;
+  const pixelsPerMajorY = (majorStep / yRange) * height;
+  const majorStrideX = computeLabelStride(pixelsPerMajorX, 56);
+  const majorStrideY = computeLabelStride(pixelsPerMajorY, 40);
+
+  const drawLines = (
+    step: number,
+    color: string,
+    lineWidth: number,
+    strideX: number,
+    strideY: number
+  ) => {
     if (step <= 0) {
       return;
     }
@@ -82,12 +121,20 @@ function drawGrid(
     ctx.lineWidth = lineWidth;
 
     for (let x = xStart; x <= viewport.xMax; x += step) {
+      const tickIndex = Math.round(x / step);
+      if (tickIndex % strideX !== 0) {
+        continue;
+      }
       const sx = worldToScreenX(x, width, viewport);
       ctx.moveTo(sx, 0);
       ctx.lineTo(sx, height);
     }
 
     for (let y = yStart; y <= viewport.yMax; y += step) {
+      const tickIndex = Math.round(y / step);
+      if (tickIndex % strideY !== 0) {
+        continue;
+      }
       const sy = worldToScreenY(y, height, viewport);
       ctx.moveTo(0, sy);
       ctx.lineTo(width, sy);
@@ -97,10 +144,15 @@ function drawGrid(
   };
 
   if (config.showMinorGrid) {
-    drawLines(config.minorStep, colors.minorGrid, 0.7);
+    const minorStep = Math.max(1e-9, config.minorStep);
+    const pixelsPerMinorX = (minorStep / xRange) * width;
+    const pixelsPerMinorY = (minorStep / yRange) * height;
+    const minorStrideX = computeLabelStride(pixelsPerMinorX, 18);
+    const minorStrideY = computeLabelStride(pixelsPerMinorY, 18);
+    drawLines(minorStep, colors.minorGrid, 0.7, minorStrideX, minorStrideY);
   }
 
-  drawLines(config.majorStep, colors.majorGrid, 1);
+  drawLines(majorStep, colors.majorGrid, 1, majorStrideX, majorStrideY);
 }
 
 function drawAxes(
@@ -138,12 +190,21 @@ function drawAxes(
   if (tickStep <= 0) {
     return;
   }
+  const xRange = Math.max(1e-9, viewport.xMax - viewport.xMin);
+  const yRange = Math.max(1e-9, viewport.yMax - viewport.yMin);
+  const pixelsPerStepX = (tickStep / xRange) * width;
+  const pixelsPerStepY = (tickStep / yRange) * height;
+  const xLabelStride = computeLabelStride(pixelsPerStepX, 56);
+  const yLabelStride = computeLabelStride(pixelsPerStepY, 40);
+  const xLabelStep = tickStep * xLabelStride;
+  const yLabelStep = tickStep * yLabelStride;
 
   ctx.fillStyle = colors.axisText;
   ctx.font = '12px ui-sans-serif, system-ui';
 
   const xStart = Math.ceil(viewport.xMin / tickStep) * tickStep;
   for (let x = xStart; x <= viewport.xMax; x += tickStep) {
+    const tickIndex = Math.round(x / tickStep);
     const sx = worldToScreenX(x, width, viewport);
     if (sx < 16 || sx > width - 16) {
       continue;
@@ -153,14 +214,15 @@ function drawAxes(
       ctx.moveTo(sx, y0 - 4);
       ctx.lineTo(sx, y0 + 4);
       ctx.stroke();
-      if (Math.abs(x) > Number.EPSILON) {
-        ctx.fillText(x.toFixed(1), sx - 9, y0 + 17);
+      if (Math.abs(x) > Number.EPSILON && tickIndex % xLabelStride === 0) {
+        ctx.fillText(formatTickValue(x, xLabelStep), sx - 9, y0 + 17);
       }
     }
   }
 
   const yStart = Math.ceil(viewport.yMin / tickStep) * tickStep;
   for (let y = yStart; y <= viewport.yMax; y += tickStep) {
+    const tickIndex = Math.round(y / tickStep);
     const sy = worldToScreenY(y, height, viewport);
     if (sy < 12 || sy > height - 12) {
       continue;
@@ -170,8 +232,8 @@ function drawAxes(
       ctx.moveTo(x0 - 4, sy);
       ctx.lineTo(x0 + 4, sy);
       ctx.stroke();
-      if (Math.abs(y) > Number.EPSILON) {
-        ctx.fillText(y.toFixed(1), x0 + 7, sy - 5);
+      if (Math.abs(y) > Number.EPSILON && tickIndex % yLabelStride === 0) {
+        ctx.fillText(formatTickValue(y, yLabelStep), x0 + 7, sy - 5);
       }
     }
   }
@@ -273,6 +335,119 @@ function drawFunction(
   }
 
   ctx.stroke();
+}
+
+function bisectRoot(
+  fn: (x: number) => number,
+  left: number,
+  right: number,
+  maxIterations: number
+): number | null {
+  let a = left;
+  let b = right;
+  let fa = fn(a);
+  const fb = fn(b);
+
+  if (!Number.isFinite(fa) || !Number.isFinite(fb) || fa * fb > 0) {
+    return null;
+  }
+
+  for (let i = 0; i < maxIterations; i += 1) {
+    const mid = (a + b) / 2;
+    const fm = fn(mid);
+    if (!Number.isFinite(fm)) {
+      return null;
+    }
+    if (Math.abs(fm) < 1e-8) {
+      return mid;
+    }
+    if (fa * fm <= 0) {
+      b = mid;
+    } else {
+      a = mid;
+      fa = fm;
+    }
+  }
+
+  return (a + b) / 2;
+}
+
+export function findCurveIntersections(
+  equations: EquationItem[],
+  viewport: Viewport,
+  sampleCount = 1400
+): CurveIntersection[] {
+  const compiled: CompiledEquation[] = equations
+    .filter((item) => item.visible && item.expression.trim())
+    .flatMap((item) => {
+      try {
+        return [{ item, evaluate: compileEquation(item.expression) }];
+      } catch {
+        return [];
+      }
+    });
+
+  const intersections: CurveIntersection[] = [];
+  if (compiled.length < 2) {
+    return intersections;
+  }
+
+  const xMin = viewport.xMin;
+  const xMax = viewport.xMax;
+  const span = Math.max(1e-9, xMax - xMin);
+  const steps = Math.max(120, sampleCount);
+  const xStep = span / steps;
+  const epsilonX = xStep * 1.5;
+
+  for (let i = 0; i < compiled.length; i += 1) {
+    for (let j = i + 1; j < compiled.length; j += 1) {
+      const eqA = compiled[i];
+      const eqB = compiled[j];
+      const delta = (x: number) => eqA.evaluate(x) - eqB.evaluate(x);
+
+      for (let k = 0; k < steps; k += 1) {
+        const left = xMin + k * xStep;
+        const right = xMin + (k + 1) * xStep;
+        const fLeft = delta(left);
+        const fRight = delta(right);
+
+        if (!Number.isFinite(fLeft) || !Number.isFinite(fRight)) {
+          continue;
+        }
+
+        let rootX: number | null = null;
+        if (Math.abs(fLeft) < 1e-8) {
+          rootX = left;
+        } else if (fLeft * fRight < 0) {
+          rootX = bisectRoot(delta, left, right, 24);
+        }
+
+        if (rootX === null) {
+          continue;
+        }
+
+        const rootY = eqA.evaluate(rootX);
+        if (!Number.isFinite(rootY)) {
+          continue;
+        }
+
+        const alreadyExists = intersections.some(
+          (item) => Math.abs(item.x - rootX) < epsilonX && Math.abs(item.y - rootY) < epsilonX
+        );
+        if (alreadyExists) {
+          continue;
+        }
+
+        intersections.push({
+          x: rootX,
+          y: rootY,
+          label: `${eqA.item.label || eqA.item.expression} ∩ ${eqB.item.label || eqB.item.expression}`
+        });
+      }
+    }
+  }
+
+  return intersections;
 }
 
 export function drawGraph(options: DrawOptions): string[] {

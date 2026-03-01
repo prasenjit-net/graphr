@@ -181,8 +181,10 @@ input[type='number'] {
 }
 
 .graph-area {
+  --graph-pad: 12px;
+  position: relative;
   min-height: 0;
-  padding: 12px;
+  padding: var(--graph-pad);
   background: var(--bg);
 }
 
@@ -192,6 +194,52 @@ input[type='number'] {
   border-radius: 12px;
   border: 1px solid var(--border);
   touch-action: none;
+}
+
+.hover-overlay {
+  position: absolute;
+  inset: var(--graph-pad);
+  pointer-events: none;
+}
+
+.hover-line-x,
+.hover-line-y {
+  position: absolute;
+  background: color-mix(in srgb, var(--text) 45%, transparent);
+}
+
+.hover-line-x {
+  left: 0;
+  right: 0;
+  height: 1px;
+}
+
+.hover-line-y {
+  top: 0;
+  bottom: 0;
+  width: 1px;
+}
+
+.hover-point {
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 2px solid var(--text);
+  background: var(--bg);
+  transform: translate(-50%, -50%);
+}
+
+.hover-card {
+  position: absolute;
+  max-width: 160px;
+  font-size: 0.78rem;
+  color: var(--text);
+  border: 1px solid var(--border);
+  background: var(--bg-elev);
+  border-radius: 8px;
+  padding: 6px 8px;
+  backdrop-filter: blur(6px);
 }
 
 .error {
@@ -226,8 +274,8 @@ input[type='number'] {
   }
 
   .graph-area {
+    --graph-pad: 8px;
     height: calc(100vh - 60px);
-    padding: 8px;
   }
 
   .mobile-only {
