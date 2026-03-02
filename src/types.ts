@@ -23,6 +23,8 @@ export interface GraphConfig {
   exportIntersectionLabels: boolean;
   xLabel: string;
   yLabel: string;
-  majorStep: number;
-  minorStep: number;
+  xMajorStep: number;
+  xMinorStep: number;
+  yMajorStep: number;
+  yMinorStep: number;
 }

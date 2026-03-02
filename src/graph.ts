@@ -96,32 +96,34 @@ function drawGrid(
 
   const xRange = Math.max(1e-9, viewport.xMax - viewport.xMin);
   const yRange = Math.max(1e-9, viewport.yMax - viewport.yMin);
-  const majorStep = Math.max(1e-9, config.majorStep);
-  const pixelsPerMajorX = (majorStep / xRange) * width;
-  const pixelsPerMajorY = (majorStep / yRange) * height;
+  const xMajorStep = Math.max(1e-9, config.xMajorStep);
+  const yMajorStep = Math.max(1e-9, config.yMajorStep);
+  const pixelsPerMajorX = (xMajorStep / xRange) * width;
+  const pixelsPerMajorY = (yMajorStep / yRange) * height;
   const majorStrideX = computeLabelStride(pixelsPerMajorX, 56);
   const majorStrideY = computeLabelStride(pixelsPerMajorY, 40);
 
   const drawLines = (
-    step: number,
+    stepX: number,
+    stepY: number,
     color: string,
     lineWidth: number,
     strideX: number,
     strideY: number
   ) => {
-    if (step <= 0) {
+    if (stepX <= 0 || stepY <= 0) {
       return;
     }
 
-    const xStart = Math.ceil(viewport.xMin / step) * step;
-    const yStart = Math.ceil(viewport.yMin / step) * step;
+    const xStart = Math.ceil(viewport.xMin / stepX) * stepX;
+    const yStart = Math.ceil(viewport.yMin / stepY) * stepY;
 
     ctx.beginPath();
     ctx.strokeStyle = color;
     ctx.lineWidth = lineWidth;
 
-    for (let x = xStart; x <= viewport.xMax; x += step) {
-      const tickIndex = Math.round(x / step);
+    for (let x = xStart; x <= viewport.xMax; x += stepX) {
+      const tickIndex = Math.round(x / stepX);
       if (tickIndex % strideX !== 0) {
         continue;
       }
@@ -130,8 +132,8 @@ function drawGrid(
       ctx.lineTo(sx, height);
     }
 
-    for (let y = yStart; y <= viewport.yMax; y += step) {
-      const tickIndex = Math.round(y / step);
+    for (let y = yStart; y <= viewport.yMax; y += stepY) {
+      const tickIndex = Math.round(y / stepY);
       if (tickIndex % strideY !== 0) {
         continue;
       }
@@ -144,15 +146,16 @@ function drawGrid(
   };
 
   if (config.showMinorGrid) {
-    const minorStep = Math.max(1e-9, config.minorStep);
-    const pixelsPerMinorX = (minorStep / xRange) * width;
-    const pixelsPerMinorY = (minorStep / yRange) * height;
+    const xMinorStep = Math.max(1e-9, config.xMinorStep);
+    const yMinorStep = Math.max(1e-9, config.yMinorStep);
+    const pixelsPerMinorX = (xMinorStep / xRange) * width;
+    const pixelsPerMinorY = (yMinorStep / yRange) * height;
     const minorStrideX = computeLabelStride(pixelsPerMinorX, 18);
     const minorStrideY = computeLabelStride(pixelsPerMinorY, 18);
-    drawLines(minorStep, colors.minorGrid, 0.7, minorStrideX, minorStrideY);
+    drawLines(xMinorStep, yMinorStep, colors.minorGrid, 0.7, minorStrideX, minorStrideY);
   }
 
-  drawLines(majorStep, colors.majorGrid, 1, majorStrideX, majorStrideY);
+  drawLines(xMajorStep, yMajorStep, colors.majorGrid, 1, majorStrideX, majorStrideY);
 }
 
 function drawAxes(
@@ -186,25 +189,26 @@ function drawAxes(
 
   ctx.stroke();
 
-  const tickStep = config.majorStep;
-  if (tickStep <= 0) {
+  const xTickStep = config.xMajorStep;
+  const yTickStep = config.yMajorStep;
+  if (xTickStep <= 0 || yTickStep <= 0) {
     return;
   }
   const xRange = Math.max(1e-9, viewport.xMax - viewport.xMin);
   const yRange = Math.max(1e-9, viewport.yMax - viewport.yMin);
-  const pixelsPerStepX = (tickStep / xRange) * width;
-  const pixelsPerStepY = (tickStep / yRange) * height;
+  const pixelsPerStepX = (xTickStep / xRange) * width;
+  const pixelsPerStepY = (yTickStep / yRange) * height;
   const xLabelStride = computeLabelStride(pixelsPerStepX, 56);
   const yLabelStride = computeLabelStride(pixelsPerStepY, 40);
-  const xLabelStep = tickStep * xLabelStride;
-  const yLabelStep = tickStep * yLabelStride;
+  const xLabelStep = xTickStep * xLabelStride;
+  const yLabelStep = yTickStep * yLabelStride;
 
   ctx.fillStyle = colors.axisText;
   ctx.font = '12px ui-sans-serif, system-ui';
 
-  const xStart = Math.ceil(viewport.xMin / tickStep) * tickStep;
-  for (let x = xStart; x <= viewport.xMax; x += tickStep) {
-    const tickIndex = Math.round(x / tickStep);
+  const xStart = Math.ceil(viewport.xMin / xTickStep) * xTickStep;
+  for (let x = xStart; x <= viewport.xMax; x += xTickStep) {
+    const tickIndex = Math.round(x / xTickStep);
     const sx = worldToScreenX(x, width, viewport);
     if (sx < 16 || sx > width - 16) {
       continue;
@@ -220,9 +224,9 @@ function drawAxes(
     }
   }
 
-  const yStart = Math.ceil(viewport.yMin / tickStep) * tickStep;
-  for (let y = yStart; y <= viewport.yMax; y += tickStep) {
-    const tickIndex = Math.round(y / tickStep);
+  const yStart = Math.ceil(viewport.yMin / yTickStep) * yTickStep;
+  for (let y = yStart; y <= viewport.yMax; y += yTickStep) {
+    const tickIndex = Math.round(y / yTickStep);
     const sy = worldToScreenY(y, height, viewport);
     if (sy < 12 || sy > height - 12) {
       continue;

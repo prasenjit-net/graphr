@@ -21,8 +21,10 @@ const defaultConfig: GraphConfig = {
   exportIntersectionLabels: false,
   xLabel: 'x',
   yLabel: 'y',
-  majorStep: 1,
-  minorStep: 0.5
+  xMajorStep: 1,
+  xMinorStep: 0.5,
+  yMajorStep: 1,
+  yMinorStep: 0.5
 };
 
 interface PersistedState {
@@ -187,6 +189,75 @@ function toString(value: unknown, fallback: string): string {
   return typeof value === 'string' ? value : fallback;
 }
 
+function getNiceStep(range: number, targetTicks: number): number {
+  const safeRange = Math.max(1e-9, range);
+  const roughStep = safeRange / Math.max(2, targetTicks);
+  const magnitude = 10 ** Math.floor(Math.log10(roughStep));
+  const normalized = roughStep / magnitude;
+  let nice = 10;
+  if (normalized <= 1) {
+    nice = 1;
+  } else if (normalized <= 2) {
+    nice = 2;
+  } else if (normalized <= 5) {
+    nice = 5;
+  }
+  return nice * magnitude;
+}
+
+function findRootsInRange(
+  evaluate: (x: number) => number,
+  xMin: number,
+  xMax: number,
+  segments: number
+): number[] {
+  const roots: number[] = [];
+  const count = Math.max(24, segments);
+  const step = (xMax - xMin) / count;
+  const tolerance = Math.max(1e-6, step * 0.5);
+
+  for (let i = 0; i < count; i += 1) {
+    const left = xMin + i * step;
+    const right = xMin + (i + 1) * step;
+    const fLeft = evaluate(left);
+    const fRight = evaluate(right);
+
+    if (!Number.isFinite(fLeft) || !Number.isFinite(fRight)) {
+      continue;
+    }
+
+    let root: number | null = null;
+    if (Math.abs(fLeft) < 1e-8) {
+      root = left;
+    } else if (fLeft * fRight < 0) {
+      root = findRootByBisection(evaluate, left, right);
+    }
+
+    if (root === null || !Number.isFinite(root)) {
+      continue;
+    }
+
+    const exists = roots.some((value) => Math.abs(value - root) < tolerance);
+    if (!exists) {
+      roots.push(root);
+    }
+  }
+
+  return roots;
+}
+
+function pickClosestToZero(values: number[], limit: number): number[] {
+  return [...values]
+    .sort((a, b) => Math.abs(a) - Math.abs(b))
+    .slice(0, Math.max(0, limit))
+    .sort((a, b) => a - b);
+}
+
+function roundToNearestStep(value: number, step: number): number {
+  const safeStep = Math.max(1e-9, step);
+  return Math.round(value / safeStep) * safeStep;
+}
+
 function loadPersistedState(): PersistedState | null {
   if (typeof window === 'undefined') {
     return null;
@@ -214,6 +285,8 @@ function loadPersistedState(): PersistedState | null {
     });
 
     const parsedConfig = isRecord(parsed.config) ? parsed.config : {};
+    const legacyMajor = Math.max(0.05, toNumber(parsedConfig.majorStep, defaultConfig.xMajorStep));
+    const legacyMinor = Math.max(0.01, toNumber(parsedConfig.minorStep, defaultConfig.xMinorStep));
     const config: GraphConfig = {
       showGrid: toBoolean(parsedConfig.showGrid, defaultConfig.showGrid),
       showMinorGrid: toBoolean(parsedConfig.showMinorGrid, defaultConfig.showMinorGrid),
@@ -225,8 +298,10 @@ function loadPersistedState(): PersistedState | null {
       ),
       xLabel: toString(parsedConfig.xLabel, defaultConfig.xLabel),
       yLabel: toString(parsedConfig.yLabel, defaultConfig.yLabel),
-      majorStep: Math.max(0.05, toNumber(parsedConfig.majorStep, defaultConfig.majorStep)),
-      minorStep: Math.max(0.01, toNumber(parsedConfig.minorStep, defaultConfig.minorStep))
+      xMajorStep: Math.max(0.05, toNumber(parsedConfig.xMajorStep, legacyMajor)),
+      xMinorStep: Math.max(0.01, toNumber(parsedConfig.xMinorStep, legacyMinor)),
+      yMajorStep: Math.max(0.05, toNumber(parsedConfig.yMajorStep, legacyMajor)),
+      yMinorStep: Math.max(0.01, toNumber(parsedConfig.yMinorStep, legacyMinor))
     };
 
     const equations = Array.isArray(parsed.equations)
@@ -349,7 +424,141 @@ export default function App() {
     setEquations((current) => current.filter((item) => item.id !== id));
   };
 
-  const resetView = () => setViewport(defaultViewport);
+  const resetView = () => {
+    if (!compiledEquations.length) {
+      setViewport(defaultViewport);
+      setConfig((current) => ({
+        ...current,
+        xMajorStep: defaultConfig.xMajorStep,
+        xMinorStep: defaultConfig.xMinorStep,
+        yMajorStep: defaultConfig.yMajorStep,
+        yMinorStep: defaultConfig.yMinorStep
+      }));
+      return;
+    }
+
+    const currentSpanX = Math.max(10, Math.abs(viewport.xMax - viewport.xMin));
+    const searchSpanX = Math.min(80, Math.max(24, currentSpanX * 2));
+    const searchViewport: Viewport = {
+      xMin: -searchSpanX / 2,
+      xMax: searchSpanX / 2,
+      yMin: -searchSpanX / 2,
+      yMax: searchSpanX / 2
+    };
+
+    const points: Array<{ x: number; y: number }> = [];
+    const intersections = findCurveIntersections(equations, searchViewport, 2200)
+      .sort((a, b) => Math.abs(a.x) - Math.abs(b.x))
+      .slice(0, 24);
+    intersections.forEach((point) => {
+      points.push({ x: point.x, y: point.y });
+    });
+
+    const rootSegments = 1200;
+    compiledEquations.forEach(({ evaluate }) => {
+      const yAtZero = evaluate(0);
+      if (Number.isFinite(yAtZero)) {
+        points.push({ x: 0, y: yAtZero });
+      }
+      const roots = pickClosestToZero(
+        findRootsInRange(evaluate, searchViewport.xMin, searchViewport.xMax, rootSegments),
+        8
+      );
+      roots.forEach((x) => {
+        points.push({ x, y: 0 });
+      });
+    });
+
+    if (!points.length) {
+      points.push({ x: -10, y: 0 }, { x: 10, y: 0 }, { x: 0, y: -10 }, { x: 0, y: 10 });
+    }
+
+    let xMinData = Number.POSITIVE_INFINITY;
+    let xMaxData = Number.NEGATIVE_INFINITY;
+    let yMinData = Number.POSITIVE_INFINITY;
+    let yMaxData = Number.NEGATIVE_INFINITY;
+    const xCandidates: number[] = [];
+
+    points.forEach((point) => {
+      xCandidates.push(point.x);
+      xMinData = Math.min(xMinData, point.x);
+      xMaxData = Math.max(xMaxData, point.x);
+      yMinData = Math.min(yMinData, point.y);
+      yMaxData = Math.max(yMaxData, point.y);
+    });
+
+    const nearestXs = pickClosestToZero(xCandidates, 18);
+    const xExtentFromPoints = nearestXs.length
+      ? Math.max(Math.abs(nearestXs[0]), Math.abs(nearestXs[nearestXs.length - 1]))
+      : 10;
+    const sampleHalfSpan = Math.min(40, Math.max(10, xExtentFromPoints * 1.35));
+    const sampleXMin = -sampleHalfSpan;
+    const sampleXMax = sampleHalfSpan;
+    const sampleCount = 700;
+
+    for (let i = 0; i <= sampleCount; i += 1) {
+      const x = sampleXMin + (i / sampleCount) * (sampleXMax - sampleXMin);
+      compiledEquations.forEach(({ evaluate }) => {
+        const y = evaluate(x);
+        if (!Number.isFinite(y) || Math.abs(y) > 1e6) {
+          return;
+        }
+        xMinData = Math.min(xMinData, x);
+        xMaxData = Math.max(xMaxData, x);
+        yMinData = Math.min(yMinData, y);
+        yMaxData = Math.max(yMaxData, y);
+      });
+    }
+
+    if (
+      !Number.isFinite(xMinData) ||
+      !Number.isFinite(xMaxData) ||
+      !Number.isFinite(yMinData) ||
+      !Number.isFinite(yMaxData)
+    ) {
+      setViewport(defaultViewport);
+      return;
+    }
+
+    const minSpan = 2;
+    const spanX = Math.max(minSpan, xMaxData - xMinData);
+    const spanY = Math.max(minSpan, yMaxData - yMinData);
+    const bufferX = Math.max(spanX * 0.16, getNiceStep(spanX, 20));
+    const bufferY = Math.max(spanY * 0.16, getNiceStep(spanY, 20));
+    const centerX = (xMinData + xMaxData) / 2;
+    const centerY = (yMinData + yMaxData) / 2;
+    const rawXSpan = spanX + 2 * bufferX;
+    const rawYSpan = spanY + 2 * bufferY;
+    const xMajorStep = getNiceStep(rawXSpan, 10);
+    const yMajorStep = getNiceStep(rawYSpan, 8);
+    let xTicks = Math.max(4, Math.ceil(rawXSpan / xMajorStep));
+    let yTicks = Math.max(4, Math.ceil(rawYSpan / yMajorStep));
+    if (xTicks % 2 !== 0) {
+      xTicks += 1;
+    }
+    if (yTicks % 2 !== 0) {
+      yTicks += 1;
+    }
+    const snappedCenterX = roundToNearestStep(centerX, xMajorStep);
+    const snappedCenterY = roundToNearestStep(centerY, yMajorStep);
+
+    const nextViewport = clampViewport({
+      xMin: snappedCenterX - (xTicks / 2) * xMajorStep,
+      xMax: snappedCenterX + (xTicks / 2) * xMajorStep,
+      yMin: snappedCenterY - (yTicks / 2) * yMajorStep,
+      yMax: snappedCenterY + (yTicks / 2) * yMajorStep
+    });
+
+    setViewport(nextViewport);
+
+    setConfig((current) => ({
+      ...current,
+      xMajorStep,
+      xMinorStep: Math.max(0.01, xMajorStep / 5),
+      yMajorStep,
+      yMinorStep: Math.max(0.01, yMajorStep / 5)
+    }));
+  };
 
   const exportPng = () => {
     const canvas = canvasRef.current;
@@ -815,26 +1024,62 @@ export default function App() {
                 />
               </label>
               <label>
-                Major Step
+                X Major Step
                 <input
                   type="number"
-                  value={config.majorStep}
+                  value={config.xMajorStep}
                   min="0.05"
                   step="0.1"
                   onChange={(event) =>
-                    setConfig((current) => ({ ...current, majorStep: Math.max(0.05, Number(event.target.value)) }))
+                    setConfig((current) => ({
+                      ...current,
+                      xMajorStep: Math.max(0.05, Number(event.target.value))
+                    }))
                   }
                 />
               </label>
               <label>
-                Minor Step
+                Y Major Step
                 <input
                   type="number"
-                  value={config.minorStep}
+                  value={config.yMajorStep}
+                  min="0.05"
+                  step="0.1"
+                  onChange={(event) =>
+                    setConfig((current) => ({
+                      ...current,
+                      yMajorStep: Math.max(0.05, Number(event.target.value))
+                    }))
+                  }
+                />
+              </label>
+              <label>
+                X Minor Step
+                <input
+                  type="number"
+                  value={config.xMinorStep}
                   min="0.01"
                   step="0.05"
                   onChange={(event) =>
-                    setConfig((current) => ({ ...current, minorStep: Math.max(0.01, Number(event.target.value)) }))
+                    setConfig((current) => ({
+                      ...current,
+                      xMinorStep: Math.max(0.01, Number(event.target.value))
+                    }))
+                  }
+                />
+              </label>
+              <label>
+                Y Minor Step
+                <input
+                  type="number"
+                  value={config.yMinorStep}
+                  min="0.01"
+                  step="0.05"
+                  onChange={(event) =>
+                    setConfig((current) => ({
+                      ...current,
+                      yMinorStep: Math.max(0.01, Number(event.target.value))
+                    }))
                   }
                 />
               </label>
