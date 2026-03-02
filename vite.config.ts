@@ -3,7 +3,8 @@ import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
 
 export default defineConfig(({ mode }) => ({
-  base: mode === 'github-pages' ? '/graphr/' : '/',
+  // Use relative asset paths for Pages deploys so custom domains/subpaths both work.
+  base: mode === 'github-pages' ? './' : '/',
   plugins: [
     react(),
     VitePWA({
