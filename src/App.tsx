@@ -42,14 +42,18 @@ interface HoverPoint {
   source: string;
 }
 
+interface IntersectionPoint {
+  x: number;
+  y: number;
+  source: string;
+}
+
 interface CompiledEquation {
   item: EquationItem;
   evaluate: (x: number) => number;
 }
 
-const SNAP_DISTANCE_PX = 14;
 const INTERSECTION_SNAP_DISTANCE_PX = 24;
-const ROOT_SEARCH_RADIUS_PX = 18;
 
 function makeEquation(index: number): EquationItem {
   return {
@@ -120,57 +124,6 @@ function findRootByBisection(
   }
 
   return (a + b) / 2;
-}
-
-function findNearbyXAxisIntersection(
-  evaluate: (x: number) => number,
-  cursorX: number,
-  viewport: Viewport,
-  canvas: HTMLCanvasElement
-): number | null {
-  const worldPerPixel = (viewport.xMax - viewport.xMin) / Math.max(1, canvas.clientWidth);
-  const worldYPerPixel = (viewport.yMax - viewport.yMin) / Math.max(1, canvas.clientHeight);
-  const yTolWorld = worldYPerPixel * INTERSECTION_SNAP_DISTANCE_PX;
-  const searchRadiusWorld = worldPerPixel * ROOT_SEARCH_RADIUS_PX;
-  const centerY = evaluate(cursorX);
-
-  if (Number.isFinite(centerY) && Math.abs(centerY) <= yTolWorld) {
-    return cursorX;
-  }
-
-  const left = Math.max(viewport.xMin, cursorX - searchRadiusWorld);
-  const right = Math.min(viewport.xMax, cursorX + searchRadiusWorld);
-  if (left >= right) {
-    return null;
-  }
-
-  return findRootByBisection(evaluate, left, right);
-}
-
-function findNearbyCurveIntersection(
-  evaluateA: (x: number) => number,
-  evaluateB: (x: number) => number,
-  cursorX: number,
-  viewport: Viewport,
-  canvas: HTMLCanvasElement
-): number | null {
-  const worldPerPixel = (viewport.xMax - viewport.xMin) / Math.max(1, canvas.clientWidth);
-  const worldYPerPixel = (viewport.yMax - viewport.yMin) / Math.max(1, canvas.clientHeight);
-  const yTolWorld = worldYPerPixel * INTERSECTION_SNAP_DISTANCE_PX;
-  const searchRadiusWorld = worldPerPixel * ROOT_SEARCH_RADIUS_PX;
-  const deltaAtCursor = evaluateA(cursorX) - evaluateB(cursorX);
-
-  if (Number.isFinite(deltaAtCursor) && Math.abs(deltaAtCursor) <= yTolWorld) {
-    return cursorX;
-  }
-
-  const left = Math.max(viewport.xMin, cursorX - searchRadiusWorld);
-  const right = Math.min(viewport.xMax, cursorX + searchRadiusWorld);
-  if (left >= right) {
-    return null;
-  }
-
-  return findRootByBisection((x) => evaluateA(x) - evaluateB(x), left, right);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -367,6 +320,42 @@ export default function App() {
         }),
     [equations]
   );
+  const hoverIntersections = useMemo<IntersectionPoint[]>(() => {
+    const points: IntersectionPoint[] = [];
+    const xTol = Math.max(1e-8, (viewport.xMax - viewport.xMin) / 500);
+    const yTol = Math.max(1e-8, (viewport.yMax - viewport.yMin) / 500);
+
+    const addPoint = (x: number, y: number, source: string) => {
+      if (!Number.isFinite(x) || !Number.isFinite(y)) {
+        return;
+      }
+      if (x < viewport.xMin || x > viewport.xMax || y < viewport.yMin || y > viewport.yMax) {
+        return;
+      }
+      const exists = points.some((item) => Math.abs(item.x - x) <= xTol && Math.abs(item.y - y) <= yTol);
+      if (!exists) {
+        points.push({ x, y, source });
+      }
+    };
+
+    findCurveIntersections(equations, viewport, 1800).forEach((item) => {
+      addPoint(item.x, item.y, item.label);
+    });
+
+    const rootSegments = Math.max(500, Math.floor(Math.abs(viewport.xMax - viewport.xMin) * 80));
+    compiledEquations.forEach(({ item, evaluate }) => {
+      const curveName = item.label || item.expression;
+      const xRoots = findRootsInRange(evaluate, viewport.xMin, viewport.xMax, rootSegments);
+      xRoots.forEach((x) => addPoint(x, 0, `${curveName} ∩ x-axis`));
+
+      const yIntercept = evaluate(0);
+      if (Number.isFinite(yIntercept)) {
+        addPoint(0, yIntercept, `${curveName} ∩ y-axis`);
+      }
+    });
+
+    return points;
+  }, [equations, compiledEquations, viewport]);
 
   useEffect(() => {
     document.documentElement.style.colorScheme = theme;
@@ -665,148 +654,30 @@ export default function App() {
       const rect = canvas.getBoundingClientRect();
       const screenX = event.clientX - rect.left;
       const screenY = event.clientY - rect.top;
-      const cursorWorld = screenToWorld(canvas, screenX, screenY, viewport);
-      const normalCandidates: Array<{ point: HoverPoint; distance: number }> = [];
-      const intersectionCandidates: Array<{ point: HoverPoint; distance: number }> = [];
-
-      compiledEquations.forEach(({ item, evaluate }) => {
-        const y = evaluate(cursorWorld.x);
-        if (!Number.isFinite(y)) {
-          return;
-        }
-
-        const candidateScreenY = worldToScreenY(canvas, y, viewport);
-        const distance = Math.hypot(screenX - screenX, candidateScreenY - screenY);
-        normalCandidates.push({
-          point: {
-            screenX,
-            screenY: candidateScreenY,
-            worldX: cursorWorld.x,
-            worldY: y,
-            source: item.label || item.expression
-          },
-          distance
-        });
-
-        if (config.showAxes) {
-          const xAxisIntersectionX = findNearbyXAxisIntersection(evaluate, cursorWorld.x, viewport, canvas);
-          if (xAxisIntersectionX !== null) {
-            const intersectionScreenX = worldToScreenX(canvas, xAxisIntersectionX, viewport);
-            const intersectionScreenY = worldToScreenY(canvas, 0, viewport);
-            intersectionCandidates.push({
-              point: {
-                screenX: intersectionScreenX,
-                screenY: intersectionScreenY,
-                worldX: xAxisIntersectionX,
-                worldY: 0,
-                source: `${item.label || item.expression} ∩ x-axis`
-              },
-              distance: Math.hypot(intersectionScreenX - screenX, intersectionScreenY - screenY)
-            });
-          }
-
-          const yAxisIntersectionY = evaluate(0);
-          if (Number.isFinite(yAxisIntersectionY)) {
-            const intersectionScreenX = worldToScreenX(canvas, 0, viewport);
-            const intersectionScreenY = worldToScreenY(canvas, yAxisIntersectionY, viewport);
-            intersectionCandidates.push({
-              point: {
-                screenX: intersectionScreenX,
-                screenY: intersectionScreenY,
-                worldX: 0,
-                worldY: yAxisIntersectionY,
-                source: `${item.label || item.expression} ∩ y-axis`
-              },
-              distance: Math.hypot(intersectionScreenX - screenX, intersectionScreenY - screenY)
-            });
-          }
-        }
-      });
-
-      for (let i = 0; i < compiledEquations.length; i += 1) {
-        for (let j = i + 1; j < compiledEquations.length; j += 1) {
-          const first = compiledEquations[i];
-          const second = compiledEquations[j];
-          const intersectionX = findNearbyCurveIntersection(
-            first.evaluate,
-            second.evaluate,
-            cursorWorld.x,
-            viewport,
-            canvas
-          );
-          if (intersectionX === null) {
-            continue;
-          }
-
-          const intersectionY = first.evaluate(intersectionX);
-          if (!Number.isFinite(intersectionY)) {
-            continue;
-          }
-
-          const intersectionScreenX = worldToScreenX(canvas, intersectionX, viewport);
-          const intersectionScreenY = worldToScreenY(canvas, intersectionY, viewport);
-          intersectionCandidates.push({
+      const bestIntersection = hoverIntersections
+        .map((point) => {
+          const intersectionScreenX = worldToScreenX(canvas, point.x, viewport);
+          const intersectionScreenY = worldToScreenY(canvas, point.y, viewport);
+          return {
             point: {
               screenX: intersectionScreenX,
               screenY: intersectionScreenY,
-              worldX: intersectionX,
-              worldY: intersectionY,
-              source: `${first.item.label || first.item.expression} ∩ ${second.item.label || second.item.expression}`
+              worldX: point.x,
+              worldY: point.y,
+              source: point.source
             },
             distance: Math.hypot(intersectionScreenX - screenX, intersectionScreenY - screenY)
-          });
-        }
-      }
-
-      if (config.showAxes) {
-        const xAxisScreenY = worldToScreenY(canvas, 0, viewport);
-        const xAxisDistance = Math.abs(xAxisScreenY - screenY);
-        normalCandidates.push({
-          point: {
-            screenX,
-            screenY: xAxisScreenY,
-            worldX: cursorWorld.x,
-            worldY: 0,
-            source: 'x-axis'
-          },
-          distance: xAxisDistance
-        });
-
-        const yAxisScreenX = worldToScreenX(canvas, 0, viewport);
-        const yAxisDistance = Math.abs(yAxisScreenX - screenX);
-        normalCandidates.push({
-          point: {
-            screenX: yAxisScreenX,
-            screenY,
-            worldX: 0,
-            worldY: cursorWorld.y,
-            source: 'y-axis'
-          },
-          distance: yAxisDistance
-        });
-      }
-
-      const bestIntersection = intersectionCandidates.reduce<{ point: HoverPoint; distance: number } | null>(
-        (best, current) => (!best || current.distance < best.distance ? current : best),
-        null
-      );
-      const bestNormal = normalCandidates.reduce<{ point: HoverPoint; distance: number } | null>(
+          };
+        })
+        .reduce<{ point: HoverPoint; distance: number } | null>(
         (best, current) => (!best || current.distance < best.distance ? current : best),
         null
       );
 
       if (bestIntersection && bestIntersection.distance <= INTERSECTION_SNAP_DISTANCE_PX) {
         setHoverPoint(bestIntersection.point);
-      } else if (bestNormal && bestNormal.distance <= SNAP_DISTANCE_PX) {
-        setHoverPoint(bestNormal.point);
       } else {
-        setHoverPoint({
-          screenX,
-          screenY,
-          worldX: cursorWorld.x,
-          worldY: cursorWorld.y,
-          source: 'cursor'
-        });
+        setHoverPoint(null);
       }
       return;
     }
